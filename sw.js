@@ -1,4 +1,4 @@
-const CACHE = 'lector-v2';
+const CACHE = 'lector-v3';
 const SHELL = [
   './',
   './index.html',
@@ -7,6 +7,9 @@ const SHELL = [
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
   'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js',
+  'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js',
 ];
 
 self.addEventListener('install', e => {
@@ -26,8 +29,11 @@ self.addEventListener('fetch', e => {
   // Network-only for article extraction.
   if (url.hostname === 'r.jina.ai') return;
 
+  // Firestore/auth traffic must never be intercepted.
+  if (url.hostname.endsWith('googleapis.com') || url.hostname.endsWith('firebaseapp.com')) return;
+
   const cacheable = e.request.method === 'GET' &&
-    (url.origin === location.origin || url.hostname === 'cdnjs.cloudflare.com');
+    (url.origin === location.origin || url.hostname === 'cdnjs.cloudflare.com' || url.hostname === 'www.gstatic.com');
 
   // Network-first for pages and same-origin files so updates land right away;
   // cache is the offline fallback. CDN libs stay cache-first (versioned URLs).

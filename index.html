@@ -90,6 +90,10 @@
   }
   .doc-card .doc-del:hover { color: var(--danger); }
   .progress-ring { font-size: 0.75rem; color: var(--accent); font-weight: 700; min-width: 42px; text-align: right; }
+  .card-bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.1); margin-top: 8px; overflow: hidden; }
+  .card-bar > div { height: 100%; background: linear-gradient(90deg, #7c6cf0, #ffd166); border-radius: 2px; }
+  .time-row { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-dim); padding: 0 2px; }
+  #syncBtn.on { color: #7ee2a8; border-color: rgba(126,226,168,0.45); }
   .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
   .empty-state .big { font-size: 3rem; margin-bottom: 12px; }
 
@@ -202,6 +206,7 @@
 <header>
   <h1 id="logo" title="Voltar para a biblioteca">LECTOR</h1>
   <div class="spacer"></div>
+  <button class="icon-btn" id="syncBtn" title="Sincronizar entre dispositivos">☁️</button>
   <button class="icon-btn" id="backBtn" style="display:none">‹ Biblioteca</button>
 </header>
 
@@ -231,10 +236,12 @@
 
 <!-- ================= PLAYER ================= -->
 <div id="playerBar" class="glass">
-  <div id="progressWrap"><div id="progressFill"></div></div>
-  <div class="player-row" id="chapterRow" style="display:none">
-    <button id="chapterLabel" title="Ver capítulos">📑 Capítulos</button>
+  <div class="player-row" id="chapterRow">
+    <button class="pbtn" id="switchBtn" title="Trocar de livro" style="width:38px;height:38px;font-size:0.95rem">📚</button>
+    <button id="chapterLabel" title="Ver capítulos" style="display:none">📑 Capítulos</button>
   </div>
+  <div id="progressWrap"><div id="progressFill"></div></div>
+  <div class="time-row"><span id="timeChap"></span><span id="timeBook"></span></div>
   <div class="player-row">
     <button class="pbtn" id="prevChapBtn" title="Capítulo anterior" style="display:none">⏪</button>
     <button class="pbtn" id="prevBtn" title="Frase anterior">⏮</button>
@@ -271,6 +278,16 @@
   </div>
 </dialog>
 
+<dialog id="switchDialog">
+  <div class="dialog-inner">
+    <h2>📚 Trocar de livro</h2>
+    <div id="switchList" style="max-height:55vh;overflow-y:auto;display:flex;flex-direction:column;gap:2px"></div>
+    <div class="dialog-actions">
+      <button class="btn-ghost" data-close>Fechar</button>
+    </div>
+  </div>
+</dialog>
+
 <dialog id="chapterDialog">
   <div class="dialog-inner">
     <h2>📑 Capítulos</h2>
@@ -285,6 +302,9 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script>
 'use strict';
 
@@ -384,6 +404,14 @@ function extractMarkdownish(raw) {
 
 function estMinutes(text) { return Math.max(1, Math.round(wordCount(text) / 170)); }
 
+function fmtDur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
 /* ============================================================
    Library view
    ============================================================ */
@@ -397,11 +425,13 @@ async function renderLibrary() {
     const pct = Math.min(100, Math.round(((doc.position || 0) / total) * 100));
     const card = document.createElement('div');
     card.className = 'doc-card glass';
+    const restMin = Math.max(0, Math.round(estMinutes(doc.text) * (1 - pct / 100)));
     card.innerHTML = `
       <div class="doc-emoji">${SOURCE_EMOJI[doc.source] || '📄'}</div>
       <div class="doc-info">
         <div class="doc-title"></div>
-        <div class="doc-meta">${estMinutes(doc.text)} min de leitura</div>
+        <div class="doc-meta">${pct >= 100 ? 'Concluído 🎉' : (pct > 0 ? `restam ~${restMin} min` : `${estMinutes(doc.text)} min de leitura`)}</div>
+        <div class="card-bar"><div style="width:${pct}%"></div></div>
       </div>
       <div class="progress-ring">${pct}%</div>
       <button class="doc-del" title="Excluir">✕</button>`;
@@ -409,7 +439,11 @@ async function renderLibrary() {
     card.addEventListener('click', () => openReader(doc.id));
     card.querySelector('.doc-del').addEventListener('click', async e => {
       e.stopPropagation();
-      if (confirm(`Excluir "${doc.title}"?`)) { await DB.del(doc.id); renderLibrary(); }
+      if (confirm(`Excluir "${doc.title}"?`)) {
+        await DB.del(doc.id);
+        if (fbUser) metaSet({ [doc.id]: { deleted: true, updatedAt: Date.now(), title: doc.title } });
+        renderLibrary();
+      }
     });
     list.appendChild(card);
   }
@@ -426,10 +460,12 @@ async function addDoc(title, text, source, chapters) {
     position: 0,
     sentenceCount: splitSentences(text).length,
     addedAt: Date.now(),
+    updatedAt: Date.now(),
   };
   await DB.put(doc);
   renderLibrary();
   openReader(doc.id);
+  if (fbUser) uploadText(doc);
 }
 
 /* ============================================================
@@ -630,9 +666,13 @@ async function openReader(id) {
     if (idx !== -1) player.chapters.push({ title: ch.title, idx });
   }
   const hasChapters = player.chapters.length > 1;
-  $('#chapterRow').style.display = hasChapters ? 'flex' : 'none';
+  $('#chapterLabel').style.display = hasChapters ? 'block' : 'none';
   $('#prevChapBtn').style.display = hasChapters ? 'grid' : 'none';
   $('#nextChapBtn').style.display = hasChapters ? 'grid' : 'none';
+
+  // Cumulative char counts per sentence, for Audible-style time estimates.
+  player.charCum = [0];
+  for (const s of player.sentences) player.charCum.push(player.charCum[player.charCum.length - 1] + s.text.length + 1);
 
   $('#readerTitle').textContent = doc.title;
   $('#readerSub').textContent =
@@ -682,7 +722,9 @@ function closeReader() {
 function savePosition() {
   if (!player.doc) return;
   player.doc.position = player.idx;
+  player.doc.updatedAt = Date.now();
   DB.put(player.doc);
+  schedulePositionPush();
 }
 
 function highlightSentence(i, scroll = true) {
@@ -716,9 +758,37 @@ function highlightWord(charIndex, charLength) {
   el.append(document.createTextNode(text.slice(end) + ' '));
 }
 
+// Current chapter segment as sentence range [start, end).
+function currentSegment() {
+  const n = player.sentences.length;
+  if (player.chapters.length > 1) {
+    const cur = currentChapter();
+    if (cur !== -1) {
+      const start = player.chapters[cur].idx;
+      const end = cur + 1 < player.chapters.length ? player.chapters[cur + 1].idx : n;
+      return { start, end };
+    }
+  }
+  return { start: 0, end: n };
+}
+
 function updateProgress() {
-  const pct = player.sentences.length ? (player.idx / player.sentences.length) * 100 : 0;
-  $('#progressFill').style.width = pct + '%';
+  const n = player.sentences.length;
+  if (!n) return;
+  const { start, end } = currentSegment();
+  const pct = end > start ? ((player.idx - start) / (end - start)) * 100 : 100;
+  $('#progressFill').style.width = Math.min(100, Math.max(0, pct)) + '%';
+
+  // Audible-style remaining times, from calibrated speech speed at the current rate.
+  const speed = player.cps * player.rate; // chars per second
+  const secBook = (player.charCum[n] - player.charCum[player.idx]) / speed;
+  if (player.chapters.length > 1) {
+    const secChap = (player.charCum[end] - player.charCum[player.idx]) / speed;
+    $('#timeChap').textContent = `-${fmtDur(secChap)} no capítulo`;
+  } else {
+    $('#timeChap').textContent = '';
+  }
+  $('#timeBook').textContent = `${fmtDur(secBook)} restantes no ${player.doc && player.doc.source === 'epub' ? 'livro' : 'texto'}`;
 }
 
 /* ---------- Word-highlight fallback (timer-based karaoke) ---------- */
@@ -885,6 +955,37 @@ function openChapterList() {
   if (curEl) curEl.scrollIntoView({ block: 'center' });
 }
 
+/* ---------- Book switcher ---------- */
+async function openSwitchList() {
+  const docs = (await DB.all()).sort((a, b) => b.addedAt - a.addedAt);
+  const list = $('#switchList');
+  list.innerHTML = '';
+  for (const d of docs) {
+    const total = d.sentenceCount || 1;
+    const pct = Math.min(100, Math.round(((d.position || 0) / total) * 100));
+    const btn = document.createElement('button');
+    btn.className = 'chapter-item' + (player.doc && d.id === player.doc.id ? ' current' : '');
+    btn.innerHTML = `
+      <span style="font-size:1.2rem">${SOURCE_EMOJI[d.source] || '📄'}</span>
+      <span style="flex:1;min-width:0">
+        <span class="sw-title" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></span>
+        <span class="card-bar" style="display:block;margin-top:5px"><span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#7c6cf0,#ffd166)"></span></span>
+      </span>
+      <span class="ch-num">${pct}%</span>`;
+    btn.querySelector('.sw-title').textContent = d.title;
+    btn.addEventListener('click', async () => {
+      $('#switchDialog').close();
+      if (player.doc && d.id === player.doc.id) return;
+      const wasPlaying = player.playing;
+      savePosition();
+      await openReader(d.id);
+      if (wasPlaying) play();
+    });
+    list.appendChild(btn);
+  }
+  $('#switchDialog').showModal();
+}
+
 /* ============================================================
    Events
    ============================================================ */
@@ -894,11 +995,13 @@ $('#nextBtn').addEventListener('click', () => jumpTo(player.idx + 1));
 $('#prevChapBtn').addEventListener('click', prevChapter);
 $('#nextChapBtn').addEventListener('click', nextChapter);
 $('#chapterLabel').addEventListener('click', openChapterList);
+$('#switchBtn').addEventListener('click', openSwitchList);
 $('#speedBtn').addEventListener('click', () => {
   const i = RATES.indexOf(player.rate);
   player.rate = RATES[(i + 1) % RATES.length];
   localStorage.setItem('lector-rate', player.rate);
   updateSpeedBtn();
+  updateProgress(); // remaining times depend on rate
   if (player.playing) { speechSynthesis.cancel(); speakCurrent(); }
 });
 $('#voiceSel').addEventListener('change', e => {
@@ -909,7 +1012,8 @@ $('#voiceSel').addEventListener('change', e => {
 $('#progressWrap').addEventListener('click', e => {
   const rect = e.currentTarget.getBoundingClientRect();
   const frac = (e.clientX - rect.left) / rect.width;
-  jumpTo(Math.floor(frac * player.sentences.length));
+  const { start, end } = currentSegment(); // seek within the current chapter, like Audible
+  jumpTo(start + Math.floor(frac * (end - start)));
 });
 $('#backBtn').addEventListener('click', closeReader);
 $('#logo').addEventListener('click', () => { if (player.doc) closeReader(); });
@@ -973,10 +1077,187 @@ window.addEventListener('beforeunload', () => { savePosition(); speechSynthesis.
 document.addEventListener('visibilitychange', () => { if (document.hidden) savePosition(); });
 window.addEventListener('pagehide', savePosition);
 
+/* ============================================================
+   Cloud sync (Firestore — mesmo projeto do Orbita/LATINVM)
+   Meta (posições, títulos) fica em users/{uid}.lector.books;
+   o texto completo vai em chunks na subcoleção lector_texts.
+   ============================================================ */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyA5Mr_PMNfazmPqOeDaqdwWv3yHzEone5Q",
+  authDomain: "orbita-386d6.firebaseapp.com",
+  projectId: "orbita-386d6",
+  storageBucket: "orbita-386d6.firebasestorage.app",
+  messagingSenderId: "558543348252",
+  appId: "1:558543348252:web:e9b79438b31bb9db7435d9"
+};
+const TEXT_CHUNK = 200000; // chars per Firestore doc, safely under the 1MB limit
+let fbUser = null, fbDb = null, snapUnsub = null, pushTimer = null, applyingCloud = false;
+const cloudOn = () => typeof firebase !== 'undefined';
+
+function initCloud() {
+  if (!cloudOn() || fbDb) { updateSyncBtn(); return; }
+  firebase.initializeApp(FIREBASE_CONFIG);
+  fbDb = firebase.firestore();
+  firebase.auth().onAuthStateChanged(u => {
+    fbUser = u;
+    updateSyncBtn();
+    if (u) startCloudSync();
+    else if (snapUnsub) { snapUnsub(); snapUnsub = null; }
+  });
+}
+
+function updateSyncBtn() {
+  const b = $('#syncBtn');
+  if (!cloudOn()) { b.style.display = 'none'; return; }
+  b.textContent = fbUser ? '☁️✓' : '☁️';
+  b.classList.toggle('on', !!fbUser);
+  b.title = fbUser
+    ? `Sincronizando como ${fbUser.displayName || fbUser.email} (toque para sair)`
+    : 'Entrar com Google para sincronizar entre dispositivos';
+}
+
+$('#syncBtn').addEventListener('click', async () => {
+  if (!cloudOn()) return;
+  if (!fbUser) {
+    try { await firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+    catch (e) { toast('❌ Login falhou: ' + (e.code || e.message), 4000); }
+  } else if (confirm('Sair da sincronização? (os livros continuam salvos neste aparelho)')) {
+    firebase.auth().signOut();
+  }
+});
+
+function bookMeta(d) {
+  return {
+    title: d.title, source: d.source,
+    position: d.position || 0,
+    sentenceCount: d.sentenceCount || 0,
+    addedAt: d.addedAt,
+    updatedAt: d.updatedAt || d.addedAt,
+    parts: d.cloudParts || 0,
+  };
+}
+
+async function metaSet(booksPatch) {
+  if (!fbUser) return;
+  try { await fbDb.collection('users').doc(fbUser.uid).set({ lector: { books: booksPatch } }, { merge: true }); }
+  catch (e) { console.error('metaSet', e); }
+}
+
+async function uploadText(d) {
+  if (!fbUser) return;
+  try {
+    const col = fbDb.collection('users').doc(fbUser.uid).collection('lector_texts');
+    const nParts = Math.max(1, Math.ceil(d.text.length / TEXT_CHUNK));
+    for (let i = 0; i < nParts; i++) {
+      const part = { text: d.text.slice(i * TEXT_CHUNK, (i + 1) * TEXT_CHUNK) };
+      if (i === 0) { part.chapters = d.chapters || []; part.nParts = nParts; }
+      await col.doc(`${d.id}_p${i}`).set(part);
+    }
+    d.cloudParts = nParts;
+    await DB.put(d);
+    await metaSet({ [d.id]: bookMeta(d) });
+  } catch (e) {
+    console.error('uploadText', e);
+    if (e.code === 'permission-denied') {
+      await metaSet({ [d.id]: bookMeta(d) }); // at least positions sync
+      toast('⚠️ Posição sincroniza, mas o texto não subiu (rules do Firestore)', 5000);
+    }
+  }
+}
+
+async function fetchBookText(id, cb) {
+  try {
+    if (!cb.parts) return null;
+    const col = fbDb.collection('users').doc(fbUser.uid).collection('lector_texts');
+    let text = '', chapters = [];
+    for (let i = 0; i < cb.parts; i++) {
+      const snap = await col.doc(`${id}_p${i}`).get();
+      if (!snap.exists) return null;
+      const data = snap.data();
+      text += data.text;
+      if (i === 0) chapters = data.chapters || [];
+    }
+    return {
+      id, title: cb.title, source: cb.source, text, chapters,
+      position: cb.position || 0, sentenceCount: cb.sentenceCount,
+      addedAt: cb.addedAt || Date.now(), updatedAt: cb.updatedAt || Date.now(),
+      cloudParts: cb.parts,
+    };
+  } catch (e) { console.error('fetchBookText', e); return null; }
+}
+
+function startCloudSync() {
+  if (snapUnsub) snapUnsub();
+  snapUnsub = fbDb.collection('users').doc(fbUser.uid)
+    .onSnapshot(snap => {
+      const cloud = (snap.exists && snap.data().lector) || {};
+      reconcile(cloud.books || {});
+    }, err => { console.error('cloudSync', err); toast('Sync: ' + (err.code || err.message), 3500); });
+}
+
+async function reconcile(cbooks) {
+  if (applyingCloud) return;
+  applyingCloud = true;
+  try {
+    const local = await DB.all();
+    const localById = Object.fromEntries(local.map(d => [d.id, d]));
+    const pushMeta = {};
+    let changedLocal = false;
+
+    for (const [id, cb] of Object.entries(cbooks)) {
+      const lb = localById[id];
+      if (cb.deleted) {
+        if (lb && (lb.updatedAt || 0) <= (cb.updatedAt || 0)) {
+          await DB.del(id);
+          changedLocal = true;
+          if (player.doc && player.doc.id === id) closeReader();
+        }
+        continue;
+      }
+      if (!lb) {
+        const full = await fetchBookText(id, cb);
+        if (full) { await DB.put(full); changedLocal = true; }
+      } else if ((cb.updatedAt || 0) > (lb.updatedAt || 0)) {
+        lb.position = cb.position;
+        lb.updatedAt = cb.updatedAt;
+        await DB.put(lb);
+        changedLocal = true;
+        // Reading this book right now and idle: jump to the newer position.
+        if (player.doc && player.doc.id === id && !player.playing) {
+          player.doc = lb;
+          jumpTo(cb.position || 0);
+        }
+      } else if ((lb.updatedAt || 0) > (cb.updatedAt || 0)) {
+        pushMeta[id] = bookMeta(lb);
+      }
+      if (lb && !lb.cloudParts && cb.parts) { lb.cloudParts = cb.parts; await DB.put(lb); }
+    }
+
+    for (const lb of local) {
+      if (!cbooks[lb.id]) { pushMeta[lb.id] = bookMeta(lb); uploadText(lb); }
+    }
+
+    if (Object.keys(pushMeta).length) await metaSet(pushMeta);
+    if (changedLocal) {
+      if ($('#libraryView').style.display !== 'none') renderLibrary();
+      toast('☁️ Biblioteca sincronizada');
+    }
+  } finally { applyingCloud = false; }
+}
+
+function schedulePositionPush() {
+  if (!fbUser || applyingCloud) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    if (player.doc) metaSet({ [player.doc.id]: { position: player.doc.position || 0, updatedAt: player.doc.updatedAt || Date.now() } });
+  }, 4000);
+}
+
 // PWA service worker
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+initCloud();
 
 populateVoices();
 renderLibrary();
