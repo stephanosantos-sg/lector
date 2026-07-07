@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0f0c29">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Lector</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<style>
+  :root {
+    --bg1: #0f0c29; --bg2: #302b63; --bg3: #24243e;
+    --glass: rgba(255,255,255,0.07);
+    --glass-border: rgba(255,255,255,0.14);
+    --text: #eef0ff;
+    --text-dim: rgba(238,240,255,0.55);
+    --accent: #8b7cf8;
+    --accent-soft: rgba(139,124,248,0.25);
+    --highlight-sentence: rgba(139,124,248,0.22);
+    --highlight-word: rgba(255,209,102,0.55);
+    --danger: #ff6b81;
+    --radius: 18px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 55%, var(--bg3) 100%);
+    background-attachment: fixed;
+    color: var(--text);
+    min-height: 100dvh;
+  }
+  .glass {
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+  }
+  header {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 12px;
+    padding: calc(env(safe-area-inset-top) + 14px) 20px 14px;
+    background: rgba(15,12,41,0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--glass-border);
+  }
+  header h1 {
+    font-size: 1.25rem; letter-spacing: 0.35em; font-weight: 700;
+    background: linear-gradient(90deg, #c3b8ff, #8b7cf8);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    cursor: pointer; user-select: none;
+  }
+  header .spacer { flex: 1; }
+  .icon-btn {
+    border: 1px solid var(--glass-border); background: var(--glass);
+    color: var(--text); border-radius: 12px; padding: 8px 14px;
+    font-size: 0.95rem; cursor: pointer; transition: background 0.2s;
+  }
+  .icon-btn:hover { background: var(--accent-soft); }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 140px; }
+
+  /* ---------- Library ---------- */
+  .add-bar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 22px; }
+  .add-bar .icon-btn { flex: 1; min-width: 130px; text-align: center; padding: 14px; font-weight: 600; }
+  .doc-list { display: flex; flex-direction: column; gap: 12px; }
+  .doc-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 18px; cursor: pointer; transition: transform 0.15s, background 0.2s;
+  }
+  .doc-card:hover { background: rgba(255,255,255,0.11); transform: translateY(-1px); }
+  .doc-card .doc-emoji { font-size: 1.6rem; }
+  .doc-card .doc-info { flex: 1; min-width: 0; }
+  .doc-card .doc-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .doc-card .doc-meta { font-size: 0.8rem; color: var(--text-dim); margin-top: 3px; }
+  .doc-card .doc-del {
+    border: none; background: none; color: var(--text-dim);
+    font-size: 1.1rem; cursor: pointer; padding: 6px;
+  }
+  .doc-card .doc-del:hover { color: var(--danger); }
+  .progress-ring { font-size: 0.75rem; color: var(--accent); font-weight: 700; min-width: 42px; text-align: right; }
+  .empty-state { text-align: center; padding: 60px 20px; color: var(--text-dim); }
+  .empty-state .big { font-size: 3rem; margin-bottom: 12px; }
+
+  /* ---------- Add dialog ---------- */
+  dialog {
+    border: none; border-radius: var(--radius); padding: 0;
+    background: transparent; max-width: 560px; width: calc(100% - 32px);
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.55); backdrop-filter: blur(4px); }
+  .dialog-inner {
+    background: linear-gradient(150deg, #262350, #1b1838);
+    border: 1px solid var(--glass-border); border-radius: var(--radius);
+    padding: 22px; color: var(--text);
+  }
+  .dialog-inner h2 { font-size: 1.05rem; margin-bottom: 14px; }
+  .dialog-inner textarea, .dialog-inner input[type="text"] {
+    width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border);
+    border-radius: 12px; color: var(--text); padding: 12px; font-size: 0.95rem;
+    font-family: inherit; resize: vertical;
+  }
+  .dialog-inner textarea { min-height: 160px; }
+  .dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+  .btn-primary {
+    background: linear-gradient(90deg, #7c6cf0, #9b8cff); border: none;
+    color: #fff; font-weight: 700; border-radius: 12px; padding: 10px 20px; cursor: pointer;
+  }
+  .btn-ghost {
+    background: none; border: 1px solid var(--glass-border); color: var(--text-dim);
+    border-radius: 12px; padding: 10px 16px; cursor: pointer;
+  }
+  .hint { font-size: 0.78rem; color: var(--text-dim); margin-top: 8px; }
+
+  /* ---------- Reader ---------- */
+  #readerView { display: none; }
+  .reader-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 4px; }
+  .reader-sub { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 18px; }
+  #readerText { padding: 26px 24px; font-size: 1.12rem; line-height: 1.85; }
+  #readerText p { margin-bottom: 1.1em; }
+  #readerText .s { border-radius: 6px; padding: 1px 2px; cursor: pointer; transition: background 0.15s; }
+  #readerText .s:hover { background: rgba(255,255,255,0.08); }
+  #readerText .s.active { background: var(--highlight-sentence); }
+  #readerText .s.active mark {
+    background: var(--highlight-word); color: inherit; border-radius: 4px; padding: 0 1px;
+  }
+
+  /* ---------- Player bar ---------- */
+  #playerBar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom) + 14px);
+    width: min(680px, calc(100% - 24px));
+    display: none; flex-direction: column; gap: 8px;
+    padding: 12px 16px; z-index: 60;
+    background: rgba(24,20,55,0.85);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+  }
+  #playerBar.visible { display: flex; }
+  .player-row { display: flex; align-items: center; gap: 10px; justify-content: center; }
+  .pbtn {
+    border: none; background: var(--glass); border: 1px solid var(--glass-border);
+    color: var(--text); border-radius: 50%; width: 46px; height: 46px;
+    font-size: 1.15rem; cursor: pointer; display: grid; place-items: center;
+  }
+  .pbtn.main {
+    width: 60px; height: 60px; font-size: 1.5rem;
+    background: linear-gradient(135deg, #7c6cf0, #9b8cff); border: none;
+  }
+  .pbtn:active { transform: scale(0.94); }
+  #speedBtn { border-radius: 14px; width: auto; padding: 0 14px; height: 46px; font-weight: 700; font-size: 0.9rem; }
+  select#voiceSel {
+    width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--glass-border);
+    color: var(--text); border-radius: 10px; padding: 7px 10px; font-size: 0.82rem;
+  }
+  #chapterLabel {
+    border: none; background: none; color: var(--text-dim); font-size: 0.8rem;
+    cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; padding: 2px 8px;
+  }
+  #chapterLabel:hover { color: var(--text); }
+  .chapter-item {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    background: none; border: none; color: var(--text); text-align: left;
+    padding: 11px 12px; border-radius: 10px; cursor: pointer; font-size: 0.92rem;
+  }
+  .chapter-item:hover { background: var(--glass); }
+  .chapter-item.current { background: var(--accent-soft); font-weight: 700; }
+  .chapter-item .ch-num { color: var(--text-dim); font-size: 0.78rem; min-width: 26px; }
+  #chapterList { max-height: 55vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  #progressWrap { height: 5px; border-radius: 3px; background: rgba(255,255,255,0.12); overflow: hidden; cursor: pointer; }
+  #progressFill { height: 100%; width: 0%; background: linear-gradient(90deg, #7c6cf0, #ffd166); transition: width 0.25s; }
+  .toast {
+    position: fixed; top: calc(env(safe-area-inset-top) + 70px); left: 50%; transform: translateX(-50%);
+    background: rgba(20,17,45,0.95); border: 1px solid var(--glass-border);
+    padding: 10px 18px; border-radius: 12px; font-size: 0.85rem; z-index: 100;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; }
+  .loading { text-align: center; padding: 40px; color: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="logo" title="Voltar para a biblioteca">LECTOR</h1>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="backBtn" style="display:none">‹ Biblioteca</button>
+</header>
+
+<main>
+  <!-- ================= LIBRARY ================= -->
+  <section id="libraryView">
+    <div class="add-bar">
+      <button class="icon-btn" id="addTextBtn">✏️ Colar texto</button>
+      <button class="icon-btn" id="addUrlBtn">🔗 Artigo (URL)</button>
+      <button class="icon-btn" id="addFileBtn">📄 PDF / EPUB</button>
+      <input type="file" id="fileInput" accept=".pdf,.epub,application/pdf,application/epub+zip" hidden>
+    </div>
+    <div class="doc-list" id="docList"></div>
+    <div class="empty-state" id="emptyState" style="display:none">
+      <div class="big">📖</div>
+      <p>Sua biblioteca está vazia.<br>Adicione um texto, artigo, PDF ou EPUB acima.</p>
+    </div>
+  </section>
+
+  <!-- ================= READER ================= -->
+  <section id="readerView">
+    <div class="reader-title" id="readerTitle"></div>
+    <div class="reader-sub" id="readerSub"></div>
+    <article class="glass" id="readerText"></article>
+  </section>
+</main>
+
+<!-- ================= PLAYER ================= -->
+<div id="playerBar" class="glass">
+  <div id="progressWrap"><div id="progressFill"></div></div>
+  <div class="player-row" id="chapterRow" style="display:none">
+    <button id="chapterLabel" title="Ver capítulos">📑 Capítulos</button>
+  </div>
+  <div class="player-row">
+    <button class="pbtn" id="prevChapBtn" title="Capítulo anterior" style="display:none">⏪</button>
+    <button class="pbtn" id="prevBtn" title="Frase anterior">⏮</button>
+    <button class="pbtn main" id="playBtn" title="Reproduzir / pausar">▶</button>
+    <button class="pbtn" id="nextBtn" title="Próxima frase">⏭</button>
+    <button class="pbtn" id="nextChapBtn" title="Próximo capítulo" style="display:none">⏩</button>
+    <button class="pbtn" id="speedBtn" title="Velocidade">1x</button>
+  </div>
+  <select id="voiceSel" title="Voz"></select>
+</div>
+
+<!-- ================= DIALOGS ================= -->
+<dialog id="textDialog">
+  <div class="dialog-inner">
+    <h2>✏️ Colar texto</h2>
+    <input type="text" id="pasteTitle" placeholder="Título (opcional)" style="margin-bottom:10px">
+    <textarea id="pasteText" placeholder="Cole o texto aqui..."></textarea>
+    <div class="dialog-actions">
+      <button class="btn-ghost" data-close>Cancelar</button>
+      <button class="btn-primary" id="saveTextBtn">Adicionar</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="urlDialog">
+  <div class="dialog-inner">
+    <h2>🔗 Adicionar artigo por URL</h2>
+    <input type="text" id="urlInput" placeholder="https://exemplo.com/artigo" inputmode="url">
+    <p class="hint">O texto do artigo é extraído automaticamente (via r.jina.ai).</p>
+    <div class="dialog-actions">
+      <button class="btn-ghost" data-close>Cancelar</button>
+      <button class="btn-primary" id="fetchUrlBtn">Buscar artigo</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="chapterDialog">
+  <div class="dialog-inner">
+    <h2>📑 Capítulos</h2>
+    <div id="chapterList"></div>
+    <div class="dialog-actions">
+      <button class="btn-ghost" data-close>Fechar</button>
+    </div>
+  </div>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+'use strict';
+
+/* ============================================================
+   IndexedDB
+   ============================================================ */
+const DB = (() => {
+  let db;
+  function open() {
+    return new Promise((res, rej) => {
+      if (db) return res(db);
+      const req = indexedDB.open('lector', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('docs', { keyPath: 'id' });
+      req.onsuccess = () => { db = req.result; res(db); };
+      req.onerror = () => rej(req.error);
+    });
+  }
+  async function tx(mode, fn) {
+    const d = await open();
+    return new Promise((res, rej) => {
+      const t = d.transaction('docs', mode);
+      const store = t.objectStore('docs');
+      const out = fn(store);
+      t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
+      t.onerror = () => rej(t.error);
+    });
+  }
+  return {
+    all: () => tx('readonly', s => { const r = s.getAll(); return r; }).then(r => r),
+    get: id => tx('readonly', s => s.get(id)),
+    put: doc => tx('readwrite', s => s.put(doc)),
+    del: id => tx('readwrite', s => s.delete(id)),
+  };
+})();
+
+/* ============================================================
+   Helpers
+   ============================================================ */
+const $ = sel => document.querySelector(sel);
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const SOURCE_EMOJI = { paste: '✏️', url: '🔗', pdf: '📄', epub: '📚' };
+
+function toast(msg, ms = 2600) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function splitSentences(text) {
+  // Split paragraphs first, then sentences inside each paragraph.
+  const paragraphs = text.split(/\n{2,}|\r\n{2,}/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const result = []; // { text, para }
+  const sentenceRe = /[^.!?…]+[.!?…]+["'”’)\]]*\s*|[^.!?…]+$/g;
+  paragraphs.forEach((p, pi) => {
+    const matches = p.match(sentenceRe) || [p];
+    matches.forEach(m => {
+      const s = m.trim();
+      if (s) result.push({ text: s, para: pi });
+    });
+  });
+  return result;
+}
+
+function wordCount(text) { return (text.match(/\S+/g) || []).length; }
+
+// Parse markdown-ish raw text into clean paragraphs; heading lines become chapters.
+// Returns { text, chapters: [{ title, para }] } where para indexes the paragraphs
+// produced by splitSentences (same \n\n convention).
+function extractMarkdownish(raw) {
+  const lines = raw.split(/\r?\n/);
+  const paragraphs = [], chapters = [];
+  let buf = [];
+  const clean = s => s.replace(/[*_`>|#]+/g, '').replace(/\s+/g, ' ').trim();
+  const flush = () => {
+    if (!buf.length) return;
+    const p = clean(buf.join(' '));
+    if (p) paragraphs.push(p);
+    buf = [];
+  };
+  for (const line of lines) {
+    const l = line.trim();
+    if (!l) { flush(); continue; }
+    const h = l.match(/^#{1,6}\s+(.+)/);
+    if (h) {
+      flush();
+      const title = clean(h[1]);
+      if (title) { chapters.push({ title, para: paragraphs.length }); paragraphs.push(title); }
+    } else {
+      buf.push(l);
+    }
+  }
+  flush();
+  return { text: paragraphs.join('\n\n'), chapters };
+}
+
+function estMinutes(text) { return Math.max(1, Math.round(wordCount(text) / 170)); }
+
+/* ============================================================
+   Library view
+   ============================================================ */
+async function renderLibrary() {
+  const docs = (await DB.all()).sort((a, b) => b.addedAt - a.addedAt);
+  const list = $('#docList');
+  list.innerHTML = '';
+  $('#emptyState').style.display = docs.length ? 'none' : 'block';
+  for (const doc of docs) {
+    const total = doc.sentenceCount || 1;
+    const pct = Math.min(100, Math.round(((doc.position || 0) / total) * 100));
+    const card = document.createElement('div');
+    card.className = 'doc-card glass';
+    card.innerHTML = `
+      <div class="doc-emoji">${SOURCE_EMOJI[doc.source] || '📄'}</div>
+      <div class="doc-info">
+        <div class="doc-title"></div>
+        <div class="doc-meta">${estMinutes(doc.text)} min de leitura</div>
+      </div>
+      <div class="progress-ring">${pct}%</div>
+      <button class="doc-del" title="Excluir">✕</button>`;
+    card.querySelector('.doc-title').textContent = doc.title;
+    card.addEventListener('click', () => openReader(doc.id));
+    card.querySelector('.doc-del').addEventListener('click', async e => {
+      e.stopPropagation();
+      if (confirm(`Excluir "${doc.title}"?`)) { await DB.del(doc.id); renderLibrary(); }
+    });
+    list.appendChild(card);
+  }
+}
+
+async function addDoc(title, text, source, chapters) {
+  text = (text || '').trim();
+  if (!text) { toast('Nenhum texto encontrado.'); return; }
+  const doc = {
+    id: uid(),
+    title: (title || text.slice(0, 60)).trim(),
+    text, source,
+    chapters: chapters || [],
+    position: 0,
+    sentenceCount: splitSentences(text).length,
+    addedAt: Date.now(),
+  };
+  await DB.put(doc);
+  renderLibrary();
+  openReader(doc.id);
+}
+
+/* ============================================================
+   Content importers
+   ============================================================ */
+async function fetchArticle(url) {
+  toast('Buscando artigo...', 8000);
+  // r.jina.ai extracts the readable article and allows CORS.
+  const resp = await fetch('https://r.jina.ai/' + url, { headers: { 'X-Return-Format': 'text' } });
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  let text = await resp.text();
+  // Strip the jina header block (Title/URL Source/Markdown Content) if present.
+  let title = '';
+  const tm = text.match(/^Title:\s*(.+)$/m);
+  if (tm) title = tm[1].trim();
+  const marker = text.indexOf('Markdown Content:');
+  if (marker !== -1) text = text.slice(marker + 'Markdown Content:'.length);
+  // Strip images and links, keep headings for chapter detection.
+  text = text
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .trim();
+  const parsed = extractMarkdownish(text);
+  return { title: title || url, text: parsed.text, chapters: parsed.chapters };
+}
+
+async function importPdf(file) {
+  toast('Extraindo texto do PDF...', 10000);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const data = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const paragraphs = [], pageParaOffsets = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    let last = null, line = [];
+    const lines = [];
+    for (const item of content.items) {
+      if (last !== null && Math.abs(item.transform[5] - last) > 2) { lines.push(line.join('')); line = []; }
+      line.push(item.str);
+      last = item.transform[5];
+    }
+    if (line.length) lines.push(line.join(''));
+    pageParaOffsets.push(paragraphs.length);
+    // Join hyphenated line breaks, then merge wrapped lines into paragraphs.
+    const pageText = lines.join('\n')
+      .replace(/-\n(?=[a-záéíóúâêôãõç])/gi, '')
+      .replace(/([^\n.!?…:])\n(?!\n)/g, '$1 ');
+    pageText.split(/\n{2,}/).map(p => p.trim()).filter(Boolean).forEach(p => paragraphs.push(p));
+  }
+
+  // Chapters from the PDF outline (top level only), mapped to page start paragraphs.
+  const chapters = [];
+  try {
+    const outline = await pdf.getOutline();
+    for (const item of outline || []) {
+      let dest = item.dest;
+      if (typeof dest === 'string') dest = await pdf.getDestination(dest);
+      if (!dest || !dest[0]) continue;
+      const pageIndex = await pdf.getPageIndex(dest[0]);
+      const para = pageParaOffsets[pageIndex];
+      if (item.title && para !== undefined) chapters.push({ title: item.title.trim(), para });
+    }
+  } catch (e) { console.warn('PDF outline indisponível', e); }
+
+  return { title: file.name.replace(/\.pdf$/i, ''), text: paragraphs.join('\n\n'), chapters };
+}
+
+async function importEpub(file) {
+  toast('Extraindo texto do EPUB...', 10000);
+  const zip = await JSZip.loadAsync(file);
+  const parser = new DOMParser();
+  const containerXml = await zip.file('META-INF/container.xml').async('text');
+  const containerDoc = parser.parseFromString(containerXml, 'application/xml');
+  const opfPath = containerDoc.querySelector('rootfile').getAttribute('full-path');
+  const opfDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
+  const opfDoc = parser.parseFromString(await zip.file(opfPath).async('text'), 'application/xml');
+
+  const titleEl = opfDoc.getElementsByTagName('dc:title')[0] || opfDoc.querySelector('title');
+  const title = titleEl ? titleEl.textContent.trim() : file.name.replace(/\.epub$/i, '');
+
+  const manifestItems = [...opfDoc.querySelectorAll('manifest > item')];
+  const manifest = {};
+  manifestItems.forEach(it => manifest[it.getAttribute('id')] = it.getAttribute('href'));
+  const spine = [...opfDoc.querySelectorAll('spine > itemref')].map(ir => manifest[ir.getAttribute('idref')]).filter(Boolean);
+
+  // Chapter titles from the TOC: EPUB3 nav doc, falling back to EPUB2 NCX.
+  // Keyed by href and by basename, since TOC paths are not always opf-relative.
+  const tocMap = {};
+  const addToc = (src, label) => {
+    if (!src || !label) return;
+    const href = decodeURIComponent(src.split('#')[0]);
+    const base = href.split('/').pop();
+    if (!tocMap[href]) tocMap[href] = label;
+    if (!tocMap[base]) tocMap[base] = label;
+  };
+  try {
+    const navItem = manifestItems.find(it => (it.getAttribute('properties') || '').includes('nav'));
+    const ncxItem = manifestItems.find(it => it.getAttribute('media-type') === 'application/x-dtbncx+xml');
+    if (navItem) {
+      const navDoc = parser.parseFromString(await zip.file(decodeURIComponent(opfDir + navItem.getAttribute('href'))).async('text'), 'text/html');
+      const navEl = navDoc.querySelector('nav[type="toc"], nav#toc, nav') || navDoc;
+      navEl.querySelectorAll('a[href]').forEach(a => addToc(a.getAttribute('href'), a.textContent.replace(/\s+/g, ' ').trim()));
+    } else if (ncxItem) {
+      const ncxDoc = parser.parseFromString(await zip.file(decodeURIComponent(opfDir + ncxItem.getAttribute('href'))).async('text'), 'application/xml');
+      ncxDoc.querySelectorAll('navPoint').forEach(np => {
+        const content = np.querySelector('content');
+        const label = np.querySelector('text');
+        addToc(content && content.getAttribute('src'), label && label.textContent.replace(/\s+/g, ' ').trim());
+      });
+    }
+  } catch (e) { console.warn('EPUB TOC indisponível', e); }
+
+  const paragraphs = [], chapters = [];
+  let partNum = 0;
+  for (const href of spine) {
+    const path = decodeURIComponent(opfDir + href).replace(/#.*$/, '');
+    const entry = zip.file(path);
+    if (!entry) continue;
+    const html = await entry.async('text');
+    const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('script,style,nav').forEach(n => n.remove());
+    const blocks = doc.body ? doc.body.querySelectorAll('p,h1,h2,h3,h4,h5,h6,li,blockquote') : [];
+    const texts = [...blocks].map(b => b.textContent.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    if (!texts.length && doc.body) {
+      const t = doc.body.textContent.replace(/\s+/g, ' ').trim();
+      if (t) texts.push(t);
+    }
+    if (!texts.length) continue;
+    partNum++;
+    const heading = doc.body && doc.body.querySelector('h1,h2,h3');
+    const chTitle = tocMap[decodeURIComponent(href.split('#')[0])]
+      || tocMap[href.split('#')[0].split('/').pop()]
+      || (heading && heading.textContent.replace(/\s+/g, ' ').trim())
+      || `Parte ${partNum}`;
+    chapters.push({ title: chTitle, para: paragraphs.length });
+    texts.forEach(t => paragraphs.push(t));
+  }
+  return { title, text: paragraphs.join('\n\n'), chapters };
+}
+
+/* ============================================================
+   Reader + player
+   ============================================================ */
+const player = {
+  doc: null,
+  sentences: [],
+  chapters: [], // [{ title, idx }] where idx = first sentence of the chapter
+  idx: 0,
+  playing: false,
+  rate: parseFloat(localStorage.getItem('lector-rate') || '1'),
+  voiceURI: localStorage.getItem('lector-voice') || '',
+  utter: null,
+};
+const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
+
+function getVoices() {
+  return speechSynthesis.getVoices().sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+}
+
+function populateVoices() {
+  const sel = $('#voiceSel');
+  const voices = getVoices();
+  if (!voices.length) { sel.innerHTML = '<option>Carregando vozes...</option>'; return; }
+  sel.innerHTML = '';
+  for (const v of voices) {
+    const opt = document.createElement('option');
+    opt.value = v.voiceURI;
+    opt.textContent = `${v.name} (${v.lang})${v.localService ? '' : ' ☁️'}`;
+    sel.appendChild(opt);
+  }
+  // Restore saved voice, else prefer a pt-BR voice, else default voice.
+  const saved = voices.find(v => v.voiceURI === player.voiceURI);
+  const pt = voices.find(v => /^pt(-|_)?(BR)?/i.test(v.lang));
+  const def = voices.find(v => v.default);
+  sel.value = (saved || pt || def || voices[0]).voiceURI;
+  player.voiceURI = sel.value;
+}
+speechSynthesis.onvoiceschanged = populateVoices;
+
+async function openReader(id) {
+  const doc = await DB.get(id);
+  if (!doc) return;
+  stopSpeech();
+  player.doc = doc;
+  player.sentences = splitSentences(doc.text);
+  player.idx = Math.min(doc.position || 0, Math.max(0, player.sentences.length - 1));
+
+  // Map chapters (paragraph index) to first sentence index.
+  player.chapters = [];
+  for (const ch of doc.chapters || []) {
+    const idx = player.sentences.findIndex(s => s.para >= ch.para);
+    if (idx !== -1) player.chapters.push({ title: ch.title, idx });
+  }
+  const hasChapters = player.chapters.length > 1;
+  $('#chapterRow').style.display = hasChapters ? 'flex' : 'none';
+  $('#prevChapBtn').style.display = hasChapters ? 'grid' : 'none';
+  $('#nextChapBtn').style.display = hasChapters ? 'grid' : 'none';
+
+  $('#readerTitle').textContent = doc.title;
+  $('#readerSub').textContent =
+    `${SOURCE_EMOJI[doc.source] || ''} ${player.sentences.length} frases · ~${estMinutes(doc.text)} min`;
+
+  // Render paragraphs with sentence spans.
+  const container = $('#readerText');
+  container.innerHTML = '';
+  let curPara = -1, pEl = null;
+  player.sentences.forEach((s, i) => {
+    if (s.para !== curPara) {
+      curPara = s.para;
+      pEl = document.createElement('p');
+      container.appendChild(pEl);
+    }
+    const span = document.createElement('span');
+    span.className = 's';
+    span.dataset.i = i;
+    span.textContent = s.text + ' ';
+    span.addEventListener('click', () => { jumpTo(i); if (!player.playing) play(); });
+    pEl.appendChild(span);
+  });
+
+  $('#libraryView').style.display = 'none';
+  $('#readerView').style.display = 'block';
+  $('#backBtn').style.display = 'inline-block';
+  $('#playerBar').classList.add('visible');
+  updateSpeedBtn();
+  populateVoices();
+  highlightSentence(player.idx, false);
+  updateProgress();
+  updateChapterLabel();
+  window.scrollTo(0, 0);
+}
+
+function closeReader() {
+  stopSpeech();
+  savePosition();
+  player.doc = null;
+  $('#readerView').style.display = 'none';
+  $('#libraryView').style.display = 'block';
+  $('#backBtn').style.display = 'none';
+  $('#playerBar').classList.remove('visible');
+  renderLibrary();
+}
+
+function savePosition() {
+  if (!player.doc) return;
+  player.doc.position = player.idx;
+  DB.put(player.doc);
+}
+
+function highlightSentence(i, scroll = true) {
+  document.querySelectorAll('#readerText .s.active').forEach(el => {
+    el.classList.remove('active');
+    el.textContent = player.sentences[el.dataset.i].text + ' ';
+  });
+  const el = document.querySelector(`#readerText .s[data-i="${i}"]`);
+  if (el) {
+    el.classList.add('active');
+    if (scroll) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+function highlightWord(charIndex, charLength) {
+  const el = document.querySelector(`#readerText .s[data-i="${player.idx}"]`);
+  if (!el) return;
+  const text = player.sentences[player.idx].text;
+  let end = charIndex + (charLength || 0);
+  if (!charLength) {
+    const rest = text.slice(charIndex);
+    const m = rest.match(/^\S+/);
+    end = charIndex + (m ? m[0].length : 0);
+  }
+  if (charIndex >= text.length) return;
+  el.innerHTML = '';
+  el.append(document.createTextNode(text.slice(0, charIndex)));
+  const mark = document.createElement('mark');
+  mark.textContent = text.slice(charIndex, end);
+  el.appendChild(mark);
+  el.append(document.createTextNode(text.slice(end) + ' '));
+}
+
+function updateProgress() {
+  const pct = player.sentences.length ? (player.idx / player.sentences.length) * 100 : 0;
+  $('#progressFill').style.width = pct + '%';
+}
+
+function speakCurrent() {
+  if (!player.doc || player.idx >= player.sentences.length) { pause(); return; }
+  const s = player.sentences[player.idx];
+  const u = new SpeechSynthesisUtterance(s.text);
+  const voice = getVoices().find(v => v.voiceURI === player.voiceURI);
+  if (voice) { u.voice = voice; u.lang = voice.lang; }
+  u.rate = player.rate;
+  u.onboundary = e => { if (e.name === 'word') highlightWord(e.charIndex, e.charLength); };
+  u.onend = () => {
+    if (!player.playing || player.utter !== u) return;
+    player.idx++;
+    savePosition();
+    updateProgress();
+    if (player.idx < player.sentences.length) {
+      highlightSentence(player.idx);
+      updateChapterLabel();
+      speakCurrent();
+    } else {
+      pause();
+      toast('Fim do documento 🎉');
+    }
+  };
+  u.onerror = e => {
+    if (e.error === 'interrupted' || e.error === 'canceled') return;
+    pause();
+    toast('Erro na síntese de voz: ' + e.error);
+  };
+  player.utter = u;
+  speechSynthesis.speak(u);
+}
+
+function play() {
+  if (!player.doc) return;
+  if (player.idx >= player.sentences.length) player.idx = 0;
+  player.playing = true;
+  $('#playBtn').textContent = '⏸';
+  speechSynthesis.cancel();
+  highlightSentence(player.idx);
+  speakCurrent();
+}
+
+function pause() {
+  player.playing = false;
+  player.utter = null;
+  speechSynthesis.cancel();
+  $('#playBtn').textContent = '▶';
+  savePosition();
+}
+
+function stopSpeech() {
+  player.playing = false;
+  player.utter = null;
+  speechSynthesis.cancel();
+  $('#playBtn').textContent = '▶';
+}
+
+function jumpTo(i) {
+  player.idx = Math.max(0, Math.min(i, player.sentences.length - 1));
+  savePosition();
+  updateProgress();
+  highlightSentence(player.idx);
+  updateChapterLabel();
+  if (player.playing) { speechSynthesis.cancel(); speakCurrent(); }
+}
+
+function updateSpeedBtn() { $('#speedBtn').textContent = player.rate + 'x'; }
+
+/* ---------- Chapters ---------- */
+function currentChapter() {
+  let cur = -1;
+  player.chapters.forEach((ch, i) => { if (ch.idx <= player.idx) cur = i; });
+  return cur;
+}
+
+function updateChapterLabel() {
+  if (player.chapters.length < 2) return;
+  const i = currentChapter();
+  const ch = player.chapters[i];
+  $('#chapterLabel').textContent = ch ? `📑 ${i + 1}/${player.chapters.length} · ${ch.title}` : '📑 Capítulos';
+}
+
+function prevChapter() {
+  const i = currentChapter();
+  if (i === -1) return jumpTo(0);
+  // Like Audible: restart the current chapter if already inside it, else go back one.
+  const target = player.idx > player.chapters[i].idx ? i : Math.max(0, i - 1);
+  jumpTo(player.chapters[target].idx);
+}
+
+function nextChapter() {
+  const i = currentChapter();
+  if (i + 1 < player.chapters.length) jumpTo(player.chapters[i + 1].idx);
+  else toast('Último capítulo');
+}
+
+function openChapterList() {
+  const list = $('#chapterList');
+  list.innerHTML = '';
+  const cur = currentChapter();
+  player.chapters.forEach((ch, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'chapter-item' + (i === cur ? ' current' : '');
+    const num = document.createElement('span');
+    num.className = 'ch-num';
+    num.textContent = i + 1;
+    btn.appendChild(num);
+    btn.append(document.createTextNode(ch.title));
+    btn.addEventListener('click', () => { $('#chapterDialog').close(); jumpTo(ch.idx); });
+    list.appendChild(btn);
+  });
+  $('#chapterDialog').showModal();
+  const curEl = list.querySelector('.current');
+  if (curEl) curEl.scrollIntoView({ block: 'center' });
+}
+
+/* ============================================================
+   Events
+   ============================================================ */
+$('#playBtn').addEventListener('click', () => player.playing ? pause() : play());
+$('#prevBtn').addEventListener('click', () => jumpTo(player.idx - 1));
+$('#nextBtn').addEventListener('click', () => jumpTo(player.idx + 1));
+$('#prevChapBtn').addEventListener('click', prevChapter);
+$('#nextChapBtn').addEventListener('click', nextChapter);
+$('#chapterLabel').addEventListener('click', openChapterList);
+$('#speedBtn').addEventListener('click', () => {
+  const i = RATES.indexOf(player.rate);
+  player.rate = RATES[(i + 1) % RATES.length];
+  localStorage.setItem('lector-rate', player.rate);
+  updateSpeedBtn();
+  if (player.playing) { speechSynthesis.cancel(); speakCurrent(); }
+});
+$('#voiceSel').addEventListener('change', e => {
+  player.voiceURI = e.target.value;
+  localStorage.setItem('lector-voice', player.voiceURI);
+  if (player.playing) { speechSynthesis.cancel(); speakCurrent(); }
+});
+$('#progressWrap').addEventListener('click', e => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const frac = (e.clientX - rect.left) / rect.width;
+  jumpTo(Math.floor(frac * player.sentences.length));
+});
+$('#backBtn').addEventListener('click', closeReader);
+$('#logo').addEventListener('click', () => { if (player.doc) closeReader(); });
+
+// Add: paste text
+$('#addTextBtn').addEventListener('click', () => { $('#pasteText').value = ''; $('#pasteTitle').value = ''; $('#textDialog').showModal(); });
+$('#saveTextBtn').addEventListener('click', () => {
+  const parsed = extractMarkdownish($('#pasteText').value);
+  addDoc($('#pasteTitle').value, parsed.text, 'paste', parsed.chapters);
+  $('#textDialog').close();
+});
+
+// Add: URL
+$('#addUrlBtn').addEventListener('click', () => { $('#urlInput').value = ''; $('#urlDialog').showModal(); });
+$('#fetchUrlBtn').addEventListener('click', async () => {
+  let url = $('#urlInput').value.trim();
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  $('#urlDialog').close();
+  try {
+    const { title, text, chapters } = await fetchArticle(url);
+    addDoc(title, text, 'url', chapters);
+  } catch (err) {
+    toast('Não consegui extrair o artigo: ' + err.message, 4000);
+  }
+});
+
+// Add: file (PDF / EPUB)
+$('#addFileBtn').addEventListener('click', () => $('#fileInput').click());
+$('#fileInput').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const isEpub = /\.epub$/i.test(file.name) || file.type === 'application/epub+zip';
+    const { title, text, chapters } = isEpub ? await importEpub(file) : await importPdf(file);
+    addDoc(title, text, isEpub ? 'epub' : 'pdf', chapters);
+  } catch (err) {
+    console.error(err);
+    toast('Falha ao processar o arquivo: ' + err.message, 4000);
+  }
+});
+
+document.querySelectorAll('dialog [data-close]').forEach(b =>
+  b.addEventListener('click', () => b.closest('dialog').close()));
+
+// Keyboard shortcuts
+document.addEventListener('keydown', e => {
+  if (!player.doc || e.target.matches('input,textarea,select')) return;
+  if (e.code === 'Space') { e.preventDefault(); player.playing ? pause() : play(); }
+  if (e.code === 'ArrowLeft') jumpTo(player.idx - 1);
+  if (e.code === 'ArrowRight') jumpTo(player.idx + 1);
+});
+
+// Keep speech alive on Chrome (it silently stops long sessions without this nudge).
+setInterval(() => {
+  if (player.playing && speechSynthesis.speaking) { speechSynthesis.pause(); speechSynthesis.resume(); }
+}, 12000);
+
+window.addEventListener('beforeunload', () => { savePosition(); speechSynthesis.cancel(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) savePosition(); });
+window.addEventListener('pagehide', savePosition);
+
+// PWA service worker
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+
+populateVoices();
+renderLibrary();
+</script>
+</body>
+</html>

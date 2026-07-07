@@ -1,0 +1,19 @@
+{
+  "name": "Lector",
+  "short_name": "Lector",
+  "description": "Leitor de texto em voz alta: textos, artigos, PDFs e EPUBs",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f0c29",
+  "theme_color": "#0f0c29",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
