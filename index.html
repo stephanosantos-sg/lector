@@ -621,9 +621,11 @@ const player = {
   utter: null,
   // Word-highlight fallback: Chrome on macOS never fires onboundary for local
   // voices, so we estimate word timing and self-calibrate on each utterance end.
-  cps: parseFloat(localStorage.getItem('lector-cps') || '15'), // chars/sec at rate 1
+  // Speech speed is NOT linear in rate, so calibration is per voice+rate pair.
+  cps: parseFloat(localStorage.getItem('lector-cps') || '15'), // generic chars/sec at rate 1
+  cpsMap: JSON.parse(localStorage.getItem('lector-cps-map') || '{}'), // "voiceURI|rate" -> real chars/sec
+  voiceBoundary: JSON.parse(localStorage.getItem('lector-voice-boundary') || '{}'), // voiceURI -> emits real events
   wordTimer: null,
-  boundarySeen: false,
 };
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
@@ -789,7 +791,7 @@ function updateProgress() {
   $('#progressFill').style.width = Math.min(100, Math.max(0, pct)) + '%';
 
   // Audible-style remaining times, from calibrated speech speed at the current rate.
-  const speed = player.cps * player.rate; // chars per second
+  const speed = getCpsFor(player.voiceURI, player.rate); // real chars per second
   const secBook = (player.charCum[n] - player.charCum[player.idx]) / speed;
   if (player.chapters.length > 1) {
     const secChap = (player.charCum[end] - player.charCum[player.idx]) / speed;
@@ -805,32 +807,62 @@ function clearWordTimer() {
   if (player.wordTimer) { clearInterval(player.wordTimer); player.wordTimer = null; }
 }
 
-function startWordFallback(text) {
+// Real speech speed (chars/sec) for a voice at a rate: exact calibration if we
+// have it, else scale from the closest calibrated rate of the same voice.
+function getCpsFor(voiceURI, rate) {
+  const exact = player.cpsMap[`${voiceURI}|${rate}`];
+  if (exact) return exact;
+  const prefix = voiceURI + '|';
+  let best = null;
+  for (const k in player.cpsMap) {
+    if (!k.startsWith(prefix)) continue;
+    const r = parseFloat(k.slice(prefix.length));
+    if (!best || Math.abs(r - rate) < Math.abs(best.r - rate)) best = { r, v: player.cpsMap[k] };
+  }
+  if (best) return best.v * (rate / best.r);
+  return player.cps * rate; // generic fallback
+}
+
+function calibrateCps(voiceURI, rate, chars, elapsedMs) {
+  const measured = chars / (elapsedMs / 1000);
+  if (measured < 2 || measured > 90 || chars < 20) return; // discard cancels/hiccups/tiny samples
+  const key = `${voiceURI}|${rate}`;
+  player.cpsMap[key] = player.cpsMap[key] ? player.cpsMap[key] * 0.5 + measured * 0.5 : measured;
+  localStorage.setItem('lector-cps-map', JSON.stringify(player.cpsMap));
+  const norm = measured / rate;
+  if (norm >= 3 && norm <= 60) {
+    player.cps = player.cps * 0.7 + norm * 0.3;
+    localStorage.setItem('lector-cps', player.cps.toFixed(2));
+  }
+}
+
+function startWordFallback(text, offsetMs = 0) {
   clearWordTimer();
-  if (player.boundarySeen) return; // real boundary events are driving the highlight
+  if (player.voiceBoundary[player.voiceURI]) return; // this voice emits real boundary events
   const words = [];
   const re = /\S+/g;
   let m;
-  while ((m = re.exec(text))) words.push({ start: m.index, len: m[0].length });
+  while ((m = re.exec(text))) {
+    // Weight = chars + space, plus a pause penalty for mid-sentence punctuation.
+    const pause = /[,;:—–]["'”’)\]]*$/.test(m[0]) ? 6 : 0;
+    words.push({ start: m.index, len: m[0].length, w: m[0].length + 1 + pause });
+  }
   if (!words.length) return;
-  const t0 = performance.now();
+  const totalW = words.reduce((s, x) => s + x.w, 0);
+  const durMs = (text.length / getCpsFor(player.voiceURI, player.rate)) * 1000;
+  let acc = 0;
+  for (const x of words) { x.t = durMs * acc / totalW; acc += x.w; }
+  const t0 = performance.now() - offsetMs;
   let lastWord = -1;
   highlightWord(words[0].start, words[0].len);
   player.wordTimer = setInterval(() => {
-    if (player.boundarySeen) { clearWordTimer(); return; }
-    const elapsed = (performance.now() - t0) / 1000;
-    const pos = elapsed * player.cps * player.rate;
-    let wi = words.findIndex(w => pos < w.start + w.len);
-    if (wi === -1) wi = words.length - 1;
+    const elapsed = performance.now() - t0;
+    let wi = words.length - 1;
+    for (let i = 0; i < words.length; i++) {
+      if (elapsed < (words[i + 1] ? words[i + 1].t : Infinity)) { wi = i; break; }
+    }
     if (wi !== lastWord) { lastWord = wi; highlightWord(words[wi].start, words[wi].len); }
-  }, 60);
-}
-
-function calibrateCps(chars, elapsedMs) {
-  const measured = chars / (elapsedMs / 1000) / player.rate;
-  if (measured < 3 || measured > 60) return; // discard nonsense (cancels, hiccups)
-  player.cps = player.cps * 0.6 + measured * 0.4;
-  localStorage.setItem('lector-cps', player.cps.toFixed(2));
+  }, 50);
 }
 
 function speakCurrent() {
@@ -845,16 +877,22 @@ function speakCurrent() {
     startedAt = performance.now();
     if (player.utter === u) startWordFallback(s.text);
   };
+  let gotBoundary = false;
   u.onboundary = e => {
     if (e.name && e.name !== 'word') return;
-    player.boundarySeen = true; // real events available: they win over the timer
+    gotBoundary = true;
+    // This voice emits real word events: remember it and let them drive the highlight.
+    if (!player.voiceBoundary[player.voiceURI]) {
+      player.voiceBoundary[player.voiceURI] = true;
+      localStorage.setItem('lector-voice-boundary', JSON.stringify(player.voiceBoundary));
+    }
     clearWordTimer();
     if (player.utter === u) highlightWord(e.charIndex, e.charLength);
   };
   u.onend = () => {
     clearWordTimer();
     if (!player.playing || player.utter !== u) return;
-    calibrateCps(s.text.length, performance.now() - startedAt);
+    calibrateCps(player.voiceURI, player.rate, s.text.length, performance.now() - startedAt);
     player.idx++;
     savePosition();
     updateProgress();
@@ -876,6 +914,17 @@ function speakCurrent() {
   speechSynthesis.speak(u);
   // onstart is unreliable on some engines; arm the fallback right away too.
   startWordFallback(s.text);
+  // Watchdog: a voice marked as event-emitting that goes silent gets unmarked,
+  // so the timer karaoke takes over instead of leaving the highlight frozen.
+  if (player.voiceBoundary[player.voiceURI]) {
+    setTimeout(() => {
+      if (player.utter === u && player.playing && !gotBoundary) {
+        delete player.voiceBoundary[player.voiceURI];
+        localStorage.setItem('lector-voice-boundary', JSON.stringify(player.voiceBoundary));
+        startWordFallback(s.text, performance.now() - startedAt);
+      }
+    }, 1500);
+  }
 }
 
 function play() {
