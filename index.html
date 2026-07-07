@@ -633,8 +633,7 @@ function getVoices() {
   // pt-BR first (premium/enhanced on top), then pt-PT, then the rest.
   const tier = v => {
     const lang = v.lang.toLowerCase().replace('_', '-');
-    const premium = /premium|enhanced|aprimorada|siri/i.test(v.name + ' ' + v.voiceURI) ? 0 : 1;
-    if (lang.startsWith('pt-br')) return premium;
+    if (lang.startsWith('pt-br')) return isGoodVoice(v) ? 0 : 1;
     if (lang.startsWith('pt')) return 2;
     return 3;
   };
@@ -642,9 +641,30 @@ function getVoices() {
     tier(a) - tier(b) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
 }
 
+const isPt = v => /^pt/i.test(v.lang.replace('_', '-'));
+// Safari marks quality in the voiceURI; Chrome exposes enhanced voices with plain
+// names, so for pt the real voices are whitelisted by name (the rest is novelty junk).
+const GOOD_PT = /^(felipe|fernanda|luciana)\b/i;
+const isGoodVoice = v => /premium|enhanced|aprimorada|siri/i.test(v.name + ' ' + v.voiceURI) || (isPt(v) && GOOD_PT.test(v.name));
+
+// Keep only the good Portuguese voices (dedup identical entries — Chrome lists the
+// basic and enhanced Luciana with the same name and URI). Other languages stay.
+function voiceList() {
+  const all = getVoices();
+  const hasGoodPt = all.some(v => isPt(v) && isGoodVoice(v));
+  const seen = new Set();
+  return all.filter(v => {
+    if (hasGoodPt && isPt(v) && !isGoodVoice(v)) return false;
+    const key = `${v.name}|${v.voiceURI}|${v.lang}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function populateVoices() {
   const sel = $('#voiceSel');
-  const voices = getVoices();
+  const voices = voiceList();
   if (!voices.length) { sel.innerHTML = '<option>Carregando vozes...</option>'; return; }
   sel.innerHTML = '';
   for (const v of voices) {
