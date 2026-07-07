@@ -33,6 +33,13 @@
     color: var(--text);
     min-height: 100dvh;
   }
+  body::before {
+    content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(600px 400px at 15% 10%, rgba(139,124,248,0.18), transparent 70%),
+      radial-gradient(500px 350px at 85% 85%, rgba(255,209,102,0.07), transparent 70%),
+      radial-gradient(700px 500px at 70% 20%, rgba(80,200,255,0.08), transparent 70%);
+  }
   .glass {
     background: var(--glass);
     border: 1px solid var(--glass-border);
@@ -119,14 +126,22 @@
   #readerView { display: none; }
   .reader-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 4px; }
   .reader-sub { font-size: 0.8rem; color: var(--text-dim); margin-bottom: 18px; }
-  #readerText { padding: 26px 24px; font-size: 1.12rem; line-height: 1.85; }
-  #readerText p { margin-bottom: 1.1em; }
-  #readerText .s { border-radius: 6px; padding: 1px 2px; cursor: pointer; transition: background 0.15s; }
-  #readerText .s:hover { background: rgba(255,255,255,0.08); }
-  #readerText .s.active { background: var(--highlight-sentence); }
-  #readerText .s.active mark {
-    background: var(--highlight-word); color: inherit; border-radius: 4px; padding: 0 1px;
+  #readerText {
+    padding: 34px 30px;
+    font-family: "New York", "Iowan Old Style", "Palatino", Georgia, serif;
+    font-size: 1.22rem; line-height: 1.9; letter-spacing: 0.01em;
+    color: rgba(238,240,255,0.92);
   }
+  #readerText p { margin-bottom: 1.2em; }
+  #readerText .s { border-radius: 6px; padding: 1px 2px; cursor: pointer; transition: background 0.25s; }
+  #readerText .s:hover { background: rgba(255,255,255,0.08); }
+  #readerText .s.active { background: var(--highlight-sentence); box-shadow: 0 0 0 4px var(--highlight-sentence); }
+  #readerText .s.active mark {
+    background: #ffd166; color: #1b1838; font-weight: 600;
+    border-radius: 5px; padding: 0 4px; margin: 0 -2px;
+    box-shadow: 0 0 14px rgba(255,209,102,0.45);
+  }
+  @media (max-width: 600px) { #readerText { padding: 24px 18px; font-size: 1.12rem; } }
 
   /* ---------- Player bar ---------- */
   #playerBar {
@@ -568,6 +583,11 @@ const player = {
   rate: parseFloat(localStorage.getItem('lector-rate') || '1'),
   voiceURI: localStorage.getItem('lector-voice') || '',
   utter: null,
+  // Word-highlight fallback: Chrome on macOS never fires onboundary for local
+  // voices, so we estimate word timing and self-calibrate on each utterance end.
+  cps: parseFloat(localStorage.getItem('lector-cps') || '15'), // chars/sec at rate 1
+  wordTimer: null,
+  boundarySeen: false,
 };
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 
@@ -701,6 +721,39 @@ function updateProgress() {
   $('#progressFill').style.width = pct + '%';
 }
 
+/* ---------- Word-highlight fallback (timer-based karaoke) ---------- */
+function clearWordTimer() {
+  if (player.wordTimer) { clearInterval(player.wordTimer); player.wordTimer = null; }
+}
+
+function startWordFallback(text) {
+  clearWordTimer();
+  if (player.boundarySeen) return; // real boundary events are driving the highlight
+  const words = [];
+  const re = /\S+/g;
+  let m;
+  while ((m = re.exec(text))) words.push({ start: m.index, len: m[0].length });
+  if (!words.length) return;
+  const t0 = performance.now();
+  let lastWord = -1;
+  highlightWord(words[0].start, words[0].len);
+  player.wordTimer = setInterval(() => {
+    if (player.boundarySeen) { clearWordTimer(); return; }
+    const elapsed = (performance.now() - t0) / 1000;
+    const pos = elapsed * player.cps * player.rate;
+    let wi = words.findIndex(w => pos < w.start + w.len);
+    if (wi === -1) wi = words.length - 1;
+    if (wi !== lastWord) { lastWord = wi; highlightWord(words[wi].start, words[wi].len); }
+  }, 60);
+}
+
+function calibrateCps(chars, elapsedMs) {
+  const measured = chars / (elapsedMs / 1000) / player.rate;
+  if (measured < 3 || measured > 60) return; // discard nonsense (cancels, hiccups)
+  player.cps = player.cps * 0.6 + measured * 0.4;
+  localStorage.setItem('lector-cps', player.cps.toFixed(2));
+}
+
 function speakCurrent() {
   if (!player.doc || player.idx >= player.sentences.length) { pause(); return; }
   const s = player.sentences[player.idx];
@@ -708,9 +761,21 @@ function speakCurrent() {
   const voice = getVoices().find(v => v.voiceURI === player.voiceURI);
   if (voice) { u.voice = voice; u.lang = voice.lang; }
   u.rate = player.rate;
-  u.onboundary = e => { if (e.name === 'word') highlightWord(e.charIndex, e.charLength); };
+  let startedAt = performance.now();
+  u.onstart = () => {
+    startedAt = performance.now();
+    if (player.utter === u) startWordFallback(s.text);
+  };
+  u.onboundary = e => {
+    if (e.name && e.name !== 'word') return;
+    player.boundarySeen = true; // real events available: they win over the timer
+    clearWordTimer();
+    if (player.utter === u) highlightWord(e.charIndex, e.charLength);
+  };
   u.onend = () => {
+    clearWordTimer();
     if (!player.playing || player.utter !== u) return;
+    calibrateCps(s.text.length, performance.now() - startedAt);
     player.idx++;
     savePosition();
     updateProgress();
@@ -730,6 +795,8 @@ function speakCurrent() {
   };
   player.utter = u;
   speechSynthesis.speak(u);
+  // onstart is unreliable on some engines; arm the fallback right away too.
+  startWordFallback(s.text);
 }
 
 function play() {
@@ -745,6 +812,7 @@ function play() {
 function pause() {
   player.playing = false;
   player.utter = null;
+  clearWordTimer();
   speechSynthesis.cancel();
   $('#playBtn').textContent = '▶';
   savePosition();
@@ -753,6 +821,7 @@ function pause() {
 function stopSpeech() {
   player.playing = false;
   player.utter = null;
+  clearWordTimer();
   speechSynthesis.cancel();
   $('#playBtn').textContent = '▶';
 }
