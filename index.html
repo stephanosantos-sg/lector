@@ -951,11 +951,28 @@ function speakCurrent() {
   }
 }
 
+// Screen wake lock while reading: iOS kills speech synthesis when the screen
+// locks, so auto-lock must not fire mid-listen.
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) { /* low battery or unsupported: reading still works */ }
+}
+function releaseWakeLock() {
+  try { if (wakeLock) wakeLock.release(); } catch (e) {}
+  wakeLock = null;
+}
+
 function play() {
   if (!player.doc) return;
   if (player.idx >= player.sentences.length) player.idx = 0;
   player.playing = true;
   $('#playBtn').textContent = '⏸';
+  acquireWakeLock();
   speechSynthesis.cancel();
   highlightSentence(player.idx);
   speakCurrent();
@@ -965,6 +982,7 @@ function pause() {
   player.playing = false;
   player.utter = null;
   clearWordTimer();
+  releaseWakeLock();
   speechSynthesis.cancel();
   $('#playBtn').textContent = '▶';
   savePosition();
@@ -974,6 +992,7 @@ function stopSpeech() {
   player.playing = false;
   player.utter = null;
   clearWordTimer();
+  releaseWakeLock();
   speechSynthesis.cancel();
   $('#playBtn').textContent = '▶';
 }
@@ -1156,7 +1175,22 @@ setInterval(() => {
 }, 12000);
 
 window.addEventListener('beforeunload', () => { savePosition(); speechSynthesis.cancel(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden) savePosition(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { savePosition(); return; }
+  // Back to the foreground: iOS silently kills speech when the page is hidden
+  // or the screen locks. Wake lock does not survive either, so re-acquire and,
+  // if we were mid-listen, pick the reading back up at the current sentence.
+  if (player.playing) {
+    acquireWakeLock();
+    setTimeout(() => {
+      if (player.playing && !speechSynthesis.speaking && !speechSynthesis.pending) {
+        speechSynthesis.cancel();
+        highlightSentence(player.idx);
+        speakCurrent();
+      }
+    }, 300);
+  }
+});
 window.addEventListener('pagehide', savePosition);
 
 /* ============================================================
